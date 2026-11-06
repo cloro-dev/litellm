@@ -344,6 +344,15 @@ def non_stream_timeout(shaping: Shaping, kwargs: Mapping[str, object], data: Map
     )
 
 
+def caller_deadline(kwargs: Mapping[str, object]) -> float | None:
+    """The seconds a caller gave the whole request through ``timeout`` or ``request_timeout``.
+    The router's own timeouts bound one attempt each and are not a deadline."""
+    seconds: Final = kwargs.get("timeout") or kwargs.get("request_timeout")
+    if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or seconds <= 0:
+        return None
+    return float(seconds)
+
+
 def call_timeout(shaping: Shaping, kwargs: Mapping[str, object], data: Mapping[str, object]) -> object:
     """``_get_timeout``."""
     stream: Final = stream_timeout(shaping, kwargs, data) if kwargs.get("stream") else None

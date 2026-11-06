@@ -19,7 +19,8 @@ from tests.integration._support.client import (
     object_value,
     string_value,
 )
-from tests.integration._support.openai_wire import chat_reply
+from tests.integration._support.openai_wire import chat_reply, posted_targets
+from tests.integration._support.timing import assert_cut_short, timed
 from tests.integration._support.wire import Reply, Request, wire_server
 
 UNREACHABLE_API_BASE: Final = "http://127.0.0.1:9/v1"
@@ -28,6 +29,7 @@ CONCURRENT_REQUESTS: Final = 25
 DISTRIBUTION_REQUESTS: Final = 20
 SLOW_UPSTREAM_SECONDS: Final = 3
 HELD_REPLY_SECONDS: Final = 30
+RETRY_AFTER_SECONDS: Final = 5
 END_USER_ROW_SECONDS: Final = 70
 CUSTOM_FALLBACK_TEXT: Final = "custom fallback prompt"
 Caller = Literal["virtual-key", "master-key"]
@@ -234,6 +236,24 @@ def test_request_timeout_header_overrides_the_model_timeout(gateway: Gateway) ->
         )
         assert response.status_code == 408, response.text
         assert response.headers["x-litellm-timeout"] == "0.001"
+
+
+def _overloaded_reply(_: Request) -> Reply:
+    return Reply(
+        status=503,
+        body=b'{"error": {"message": "scripted overload", "type": "server_error", "code": null}}',
+        headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
+    )
+
+
+@pytest.mark.parametrize("timeout_header", ["x-litellm-timeout"])
+def test_request_timeout_header_bounds_retries_and_their_retry_after_sleeps(gateway: Gateway, timeout_header: str) -> None:
+    with gateway.scenario() as scenario, wire_server(_overloaded_reply) as wire:
+        model: Final = scenario.model(api_base=wire.url + "/v1", num_retries=3)
+        response: Final = timed(lambda: _chat(gateway, {"model": model}, headers={timeout_header: "1"}))
+        assert response.value.status_code == 408, response.value.text
+        assert_cut_short(response.seconds, injected_delay=RETRY_AFTER_SECONDS)
+        assert posted_targets(wire) == ("/v1/chat/completions",)
 
 
 def test_failing_model_traffic_does_not_starve_concurrent_good_requests(gateway: Gateway) -> None:

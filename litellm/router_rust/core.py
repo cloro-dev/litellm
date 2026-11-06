@@ -16,6 +16,7 @@ Settings are resolved from the ``RouterConfig`` and the host's process settings;
 core does not serve raises ``RustCoreUnsupported`` (an ``AttributeError``).
 """
 
+import asyncio
 import contextlib
 import dataclasses
 import inspect
@@ -96,7 +97,7 @@ from litellm.router_rust.invoke.endpoints import (
     stamp_error,
     unrouted_fields,
 )
-from litellm.router_rust.invoke.shaping import Shaping
+from litellm.router_rust.invoke.shaping import Shaping, caller_deadline
 from litellm.router_rust.invoke.slots import enter_deployment_slot, max_parallel_requests_limit
 from litellm.router_rust.invoke.streaming import (
     StreamAttempt,
@@ -2841,10 +2842,34 @@ class RustCore(
                 picks_reserve(plan.endpoint not in _UNRESERVED_OPS),
                 self._usage_read_scope(str(prepared.get("model")), prepared),
             ):
-                driver, step = await self._run(plan, call, prepared, fresh=True, passthrough=passthrough)
+                driver, step = await self._run_within(caller_deadline(request), plan, call, prepared, passthrough)
             if step["kind"] == "failed":
                 raise driver.failed(step)
             return await driver.finish_async(step)
+
+    async def _run_within(
+        self,
+        deadline: float | None,
+        plan: Plan,
+        call: "RouterCall[_CallSteps]",
+        prepared: Mapping[str, object],
+        passthrough: "Callable[[Mapping[str, object], str], Awaitable[object]] | None",
+    ) -> "tuple[_Driver, Mapping[str, object]]":
+        """``_run`` from the top, cut off at the caller's ``deadline`` wherever it is spent: an
+        attempt, a retry's backoff or ``Retry-After`` sleep, or a fallback hop."""
+        run: Final = self._run(plan, call, prepared, fresh=True, passthrough=passthrough)
+        if deadline is None:
+            return await run
+        try:
+            return await asyncio.wait_for(run, deadline)
+        except asyncio.TimeoutError:
+            import litellm.exceptions as litellm_exceptions
+
+            raise litellm_exceptions.Timeout(
+                message=f"Request exceeded its {deadline}s timeout across retries and fallbacks.",
+                model=str(prepared.get("model")),
+                llm_provider="",
+            ) from None
 
     async def _run(
         self,

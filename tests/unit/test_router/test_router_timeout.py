@@ -650,3 +650,46 @@ def test_azure_router_timeout_raises_after_httpx_read_timeout(
         )
 
     assert route.call_count == 1
+
+
+def _service_unavailable(retry_after: str) -> openai.InternalServerError:
+    response: Final = httpx.Response(
+        status_code=503,
+        headers={"retry-after": retry_after},
+        request=httpx.Request("POST", "https://example.invalid/v1"),
+    )
+    return openai.InternalServerError(message="scripted 503", response=response, body=None)
+
+
+def _retrying_router(**router_settings: object) -> Router:
+    return Router(
+        model_list=[{"model_name": "flaky-503", "litellm_params": {"model": "openai/flaky-503", "api_key": "test-key"}}],
+        num_retries=1,
+        **router_settings,
+    )
+
+
+@pytest.mark.parametrize("timeout_field", ["timeout", "request_timeout"])
+@pytest.mark.asyncio
+async def test_caller_timeout_cuts_off_the_retry_after_sleep(timeout_field: str) -> None:
+    router: Final = _retrying_router()
+
+    with pytest.raises(litellm.Timeout):
+        await router.acompletion(
+            model="flaky-503",
+            messages=[{"role": "user", "content": "deadline"}],
+            mock_response=_service_unavailable(retry_after="30"),
+            **{timeout_field: 0.2},
+        )
+
+
+@pytest.mark.asyncio
+async def test_router_level_timeout_stays_per_attempt_and_lets_the_retry_finish() -> None:
+    router: Final = _retrying_router(timeout=0.2)
+
+    with pytest.raises(litellm.ServiceUnavailableError):
+        await router.acompletion(
+            model="flaky-503",
+            messages=[{"role": "user", "content": "control"}],
+            mock_response=_service_unavailable(retry_after="1"),
+        )
