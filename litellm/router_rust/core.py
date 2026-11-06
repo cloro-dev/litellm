@@ -5228,16 +5228,13 @@ class _Driver:
                 # `self.success_calls[model_name] += 1`, inside the try: a counter replaced with a
                 # plain dict fails the attempt.
                 self._core._endpoints.counters.succeeded(self._plan, call)  # pyright: ignore[reportPrivateUsage]  # see above
+        except asyncio.CancelledError:
+            # The caller's deadline cancels a running attempt: its io token reservation goes back
+            # before the cancellation travels on, past the Rust call loop.
+            await self._refund_io_tokens(call)
+            raise
         except Exception as error:  # noqa: BLE001  # every attempt failure is classified and handed to the Rust call loop
-            if call is not None:
-                # `make_call`: a failed call hands back the io tokens it reserved, whatever its
-                # logging object (shared across attempts, it logs only the first failure).
-                with contextlib.suppress(Exception):
-                    await async_io_token_refund_failure(
-                        self._core._cache,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-                        call.kwargs,  # pyright: ignore[reportArgumentType]  # the call's kwargs dict
-                        parent_otel_span=get_parent_otel_span_from_kwargs(call.kwargs),
-                    )
+            await self._refund_io_tokens(call)
             failed: Final = self._failed(step, deployment, call, error)
             if reading_stream is None or not logs_failure:
                 return {**failed, "recorded": not logs_failure}
@@ -5252,6 +5249,18 @@ class _Driver:
         if session_deployment is not None:
             await self._core.count_realtime_session_success(session_deployment)
         return served
+
+    async def _refund_io_tokens(self, call: AttemptCall | None) -> None:
+        """`make_call`: a failed call hands back the io tokens it reserved, whatever its logging
+        object (shared across attempts, it logs only the first failure)."""
+        if call is None:
+            return
+        with contextlib.suppress(Exception):
+            await async_io_token_refund_failure(
+                self._core._cache,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+                call.kwargs,  # pyright: ignore[reportArgumentType]  # the call's kwargs dict
+                parent_otel_span=get_parent_otel_span_from_kwargs(call.kwargs),
+            )
 
     def attempt_sync(self, step: Mapping[str, object]) -> Mapping[str, object]:
         step = self._resolve_pods_sync(step)  # rebind-ok: see attempt

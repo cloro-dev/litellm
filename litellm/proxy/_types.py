@@ -4554,7 +4554,7 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     organization: str
     timeout: float | None
     stream_timeout: float | None
-    request_deadline: float | None
+    request_deadline: ReadOnly[float | None]
     user: str | None
     num_retries: int | None
     # True when the effective timeout came from a caller-controlled source (the

@@ -942,6 +942,7 @@ OPENAI_CHAT_COMPLETION_PARAMS: Final = [
     "logit_bias",
     "user",
     "request_timeout",
+    "request_deadline",
     "api_base",
     "api_version",
     "api_key",

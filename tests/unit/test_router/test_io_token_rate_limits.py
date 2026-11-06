@@ -1502,6 +1502,23 @@ class TestRouterIOTokenIntegration:
         assert await _io_counters_since(router, first_minute) == (0, 0)
 
     @pytest.mark.asyncio
+    async def test_a_caller_deadline_cutting_off_an_attempt_refunds_its_io_reservation(self):
+        router: Final = _router_with_io_limits()
+        first_minute: Final = _current_minute()
+
+        with pytest.raises(litellm.Timeout):
+            await router.acompletion(
+                model="limited",
+                messages=[{"role": "user", "content": "hello there"}],
+                max_tokens=100,
+                mock_response="hi",
+                mock_delay=30,
+                timeout=0.2,
+            )
+
+        assert await _io_counters_since(router, first_minute) == (0, 0)
+
+    @pytest.mark.asyncio
     async def test_model_group_info_aggregates_io_limits(self):
         router = Router(
             model_list=[
