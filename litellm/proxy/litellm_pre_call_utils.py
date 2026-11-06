@@ -1663,6 +1663,18 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
+    def _get_request_deadline_from_request(headers: dict) -> float | None:
+        """The OpenAI SDKs send their client timeout on every request (Node as ``x-stainless-timeout``,
+        Python as ``x-stainless-read-timeout``). It bounds the whole routed request, retries and
+        fallbacks included, but never lengthens a configured per-attempt timeout."""
+        deadline_header: Final = headers.get("x-stainless-timeout", headers.get("x-stainless-read-timeout"))
+        try:
+            seconds: Final = float(deadline_header) if deadline_header is not None else None
+        except ValueError:
+            return None
+        return seconds if seconds is not None and seconds > 0 else None
+
+    @staticmethod
     def _get_stream_timeout_from_request(headers: dict) -> float | None:
         """
         Get the `stream_timeout` from the request headers.
@@ -1898,6 +1910,10 @@ class LiteLLMProxyRequestSetup:
         header_stream_timeout: Final = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers)
         if header_stream_timeout is not None:
             data["stream_timeout"] = header_stream_timeout
+
+        header_deadline: Final = LiteLLMProxyRequestSetup._get_request_deadline_from_request(headers)
+        if header_deadline is not None:
+            data["request_deadline"] = header_deadline
 
         # Router._get_timeout resolves the effective per-attempt timeout from any of
         # kwargs["timeout"], kwargs["request_timeout"], or kwargs["stream_timeout"], and a
