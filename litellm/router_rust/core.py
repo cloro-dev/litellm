@@ -5193,7 +5193,7 @@ class _Driver:
                 first_to_log: Final = not failure_already_logged(call.kwargs, "async_failure")
                 logs_failure = first_to_log  # rebind-ok: whether a failure here is this attempt's to log
                 budget_left: Final = self._budget_left()
-                if budget_left is not None and budget_left <= 0:
+                if budget_left is not None and budget_left <= 0 and self._attempts > 1:
                     raise self._deadline_error()
                 pending: Final[object] = (
                     self._core._endpoints.create_file_everywhere(  # pyright: ignore[reportPrivateUsage]  # see above
@@ -5213,7 +5213,11 @@ class _Driver:
                 logs_failure = first_to_log  # rebind-ok: the stream's own failure logging, for its first chunk
                 reading_stream = stream  # rebind-ok: None until the attempt opens a stream
                 first_chunk: Final = open_attempt_stream(stream, answered)  # pyright: ignore[reportUnknownArgumentType]  # see above
-                response: Final = await (self._within_budget(first_chunk) if call.kwargs.get("stream") else first_chunk)
+                response: Final = await (
+                    self._within_budget(first_chunk)
+                    if call.kwargs.get("stream") and self._attempts > 1
+                    else first_chunk
+                )
                 logs_failure = False  # rebind-ok: see above
                 # `self.success_calls[model_name] += 1`, inside the try: a counter replaced with a
                 # plain dict fails the attempt.
@@ -5248,13 +5252,17 @@ class _Driver:
         return seconds if left is None else max(0.0, min(seconds, left))
 
     def _deadline_error(self) -> BaseException:
+        """The caller's budget ran out: a 408 the caller set, which no deployment is held to account for."""
         import litellm.exceptions as litellm_exceptions
+        from litellm.router_utils.cooldown_handlers import mark_deployment_selection_failure
 
-        return litellm_exceptions.Timeout(
+        error: Final = litellm_exceptions.Timeout(
             message=f"Request exceeded its {caller_deadline(self._request)}s timeout across retries and fallbacks.",
             model=str(self._request.get("model")),
             llm_provider="",
         )
+        mark_deployment_selection_failure(error)
+        return error
 
     def _cap_attempt_timeout(self, call: AttemptCall) -> None:
         """A retry or fallback attempt gets at most the budget left, so litellm's own timeout ends it,
@@ -5268,8 +5276,9 @@ class _Driver:
             call.kwargs["timeout"] = max(left, 0.0)  # rebind-ok: the attempt's kwargs dict, read by the host call
 
     async def _within_budget(self, pending: Awaitable[object]) -> object:
-        """A stream's first chunk, cut off when the caller's budget runs out: the failure is the
-        attempt's, logged, refunded and classified like any other."""
+        """A retry or fallback stream's first chunk, cut off when the caller's budget runs out: the
+        failure is the attempt's, logged, refunded and classified like any other. The first attempt's
+        stream is left to its own timeout, as the first attempt is as a whole."""
         left: Final = self._budget_left()
         if left is None or left <= 0:
             return await pending

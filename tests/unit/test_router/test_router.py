@@ -6603,6 +6603,42 @@ class TestCallerTimeoutCooldown:
         assert self._fail_count(router) == 0
         assert self._cooled_down_ids(router) == []
 
+    @pytest.mark.asyncio
+    async def test_a_retry_the_caller_timeout_refuses_is_not_held_against_the_deployment(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "slow-model",
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                    "model_info": {"id": "dep-1"},
+                }
+            ],
+            allowed_fails=1,
+            cooldown_time=120,
+            num_retries=1,
+        )
+        overloaded = openai.InternalServerError(
+            message="scripted 503",
+            response=httpx.Response(
+                status_code=503,
+                headers={"retry-after": "30"},
+                request=httpx.Request("POST", "https://example.invalid/v1"),
+            ),
+            body=None,
+        )
+
+        with pytest.raises(litellm.Timeout):
+            await router.acompletion(
+                model="slow-model",
+                messages=[{"role": "user", "content": "hello"}],
+                mock_response=overloaded,
+                timeout=0.2,
+                client_side_timeout=True,
+            )
+
+        assert self._fail_count(router) == 1
+        assert self._cooled_down_ids(router) == []
+
 
 def test_stream_chunks_have_generated_content_detects_text_and_non_text():
     from litellm.router_rust.invoke.streaming import _stream_chunks_have_generated_content  # noqa: PLC2701
