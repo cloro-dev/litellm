@@ -1925,6 +1925,7 @@ class LiteLLMProxyRequestSetup:
         if (
             header_timeout is not None
             or header_stream_timeout is not None
+            or header_deadline is not None
             or request_data.get("timeout") is not None
             or request_data.get("request_timeout") is not None
             or request_data.get("stream_timeout") is not None

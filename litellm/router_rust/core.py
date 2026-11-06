@@ -2842,34 +2842,10 @@ class RustCore(
                 picks_reserve(plan.endpoint not in _UNRESERVED_OPS),
                 self._usage_read_scope(str(prepared.get("model")), prepared),
             ):
-                driver, step = await self._run_within(caller_deadline(request), plan, call, prepared, passthrough)
+                driver, step = await self._run(plan, call, prepared, fresh=True, passthrough=passthrough)
             if step["kind"] == "failed":
                 raise driver.failed(step)
             return await driver.finish_async(step)
-
-    async def _run_within(
-        self,
-        deadline: float | None,
-        plan: Plan,
-        call: "RouterCall[_CallSteps]",
-        prepared: Mapping[str, object],
-        passthrough: "Callable[[Mapping[str, object], str], Awaitable[object]] | None",
-    ) -> "tuple[_Driver, Mapping[str, object]]":
-        """``_run`` from the top, cut off at the caller's ``deadline`` wherever it is spent: an
-        attempt, a retry's backoff or ``Retry-After`` sleep, or a fallback hop."""
-        run: Final = self._run(plan, call, prepared, fresh=True, passthrough=passthrough)
-        if deadline is None:
-            return await run
-        try:
-            return await asyncio.wait_for(run, deadline)
-        except asyncio.TimeoutError:
-            import litellm.exceptions as litellm_exceptions
-
-            raise litellm_exceptions.Timeout(
-                message=f"Request exceeded its {deadline}s timeout across retries and fallbacks.",
-                model=str(prepared.get("model")),
-                llm_provider="",
-            ) from None
 
     async def _run(
         self,
@@ -2912,7 +2888,7 @@ class RustCore(
                 case "attempt":
                     outcome = await driver.attempt(step)
                 case "sleep":
-                    await self._host.sleep(_sleep_seconds(step))
+                    await self._host.sleep(driver.sleep_within_budget(_sleep_seconds(step)))
                     outcome = None
                 case "allow_fallback":
                     outcome = await driver.allow_fallback(str(step["target"]))
@@ -3913,6 +3889,12 @@ def _origin_level(origin: Mapping[str, object]) -> int:
     return level if isinstance(level, int) else 0
 
 
+def _deadline_at(request: Mapping[str, object]) -> float | None:
+    """When the caller's whole-request timeout runs out, on ``perf_counter``'s clock."""
+    seconds: Final = caller_deadline(request)
+    return None if seconds is None else perf_counter() + seconds
+
+
 def _sleep_seconds(step: Mapping[str, object]) -> float:
     """A retry's sleep: ``_time_to_sleep_before_retry`` returns a plain ``0`` when another
     deployment is healthy, else a backoff in float seconds."""
@@ -4405,6 +4387,9 @@ class _Driver:
         self._plan: Final = plan
         self._op: Final = plan.endpoint
         self._request: Final = request
+        # A call from the top runs under the caller's timeout as a whole: attempts, retry sleeps and
+        # fallback hops all draw on the one budget.
+        self._deadline_at: Final = _deadline_at(request) if fresh else None
         self._cut_deployment: Final = cut_deployment if isinstance(cut_deployment, str) else None
         self._last_response: object = None
         self._last_error: BaseException | None = None
@@ -5180,6 +5165,7 @@ class _Driver:
             return {**self._failed(step, self._default_copy(step), None, refused_call), "recorded": True}
         try:
             deployment, call = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
+            self._cap_attempt_timeout(call)
             if call.refused is not None:
                 await log_refused_call(call, call.refused)
                 raise call.refused
@@ -5206,6 +5192,9 @@ class _Driver:
                         return await self._refused(step, deployment, call, refused)
                 first_to_log: Final = not failure_already_logged(call.kwargs, "async_failure")
                 logs_failure = first_to_log  # rebind-ok: whether a failure here is this attempt's to log
+                budget_left: Final = self._budget_left()
+                if budget_left is not None and budget_left <= 0:
+                    raise self._deadline_error()
                 pending: Final[object] = (
                     self._core._endpoints.create_file_everywhere(  # pyright: ignore[reportPrivateUsage]  # see above
                         _with_target_order(call.kwargs, step.get("target_order")),
@@ -5223,7 +5212,7 @@ class _Driver:
                 stream: Final = self._stream_attempt(step, call.kwargs, slot)
                 logs_failure = first_to_log  # rebind-ok: the stream's own failure logging, for its first chunk
                 reading_stream = stream  # rebind-ok: None until the attempt opens a stream
-                response: Final = await open_attempt_stream(stream, answered)  # pyright: ignore[reportUnknownArgumentType]  # see above
+                response: Final = await self._within_budget(open_attempt_stream(stream, answered))  # pyright: ignore[reportUnknownArgumentType]  # see above
                 logs_failure = False  # rebind-ok: see above
                 # `self.success_calls[model_name] += 1`, inside the try: a counter replaced with a
                 # plain dict fails the attempt.
@@ -5249,6 +5238,44 @@ class _Driver:
         if session_deployment is not None:
             await self._core.count_realtime_session_success(session_deployment)
         return served
+
+    def _budget_left(self) -> float | None:
+        return None if self._deadline_at is None else self._deadline_at - perf_counter()
+
+    def sleep_within_budget(self, seconds: float) -> float:
+        left: Final = self._budget_left()
+        return seconds if left is None else max(0.0, min(seconds, left))
+
+    def _deadline_error(self) -> BaseException:
+        import litellm.exceptions as litellm_exceptions
+
+        return litellm_exceptions.Timeout(
+            message=f"Request exceeded its {caller_deadline(self._request)}s timeout across retries and fallbacks.",
+            model=str(self._request.get("model")),
+            llm_provider="",
+        )
+
+    def _cap_attempt_timeout(self, call: AttemptCall) -> None:
+        """A retry or fallback attempt gets at most the budget left, so litellm's own timeout ends it,
+        failure callbacks and all, rather than a cancellation. The first attempt already runs under the
+        caller's timeout, which is the whole budget."""
+        left: Final = self._budget_left()
+        if left is None or self._attempts <= 1 or not isinstance(call.kwargs, dict):
+            return
+        current: Final = call.kwargs.get("timeout")
+        if current is None or (isinstance(current, (int, float)) and current > left):
+            call.kwargs["timeout"] = max(left, 0.0)
+
+    async def _within_budget(self, pending: Awaitable[object]) -> object:
+        """A stream's first chunk, cut off when the caller's budget runs out: the failure is the
+        attempt's, logged, refunded and classified like any other."""
+        left: Final = self._budget_left()
+        if left is None:
+            return await pending
+        try:
+            return await asyncio.wait_for(pending, left)
+        except asyncio.TimeoutError:
+            raise self._deadline_error() from None
 
     async def _refund_io_tokens(self, call: AttemptCall | None) -> None:
         """`make_call`: a failed call hands back the io tokens it reserved, whatever its logging

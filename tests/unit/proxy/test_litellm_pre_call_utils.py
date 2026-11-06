@@ -3054,14 +3054,14 @@ def _backend_data_for_headers(headers: dict[str, str]) -> dict[str, object]:
 
 @pytest.mark.parametrize("header", ["x-stainless-timeout", "x-stainless-read-timeout"])
 def test_openai_sdk_timeout_header_becomes_a_request_deadline_not_an_attempt_timeout(header: str) -> None:
-    data = _backend_data_for_headers({header: "90"})
+    data: Final = _backend_data_for_headers({header: "90"})
     assert data.get("request_deadline") == 90.0
     assert "timeout" not in data
-    assert "client_side_timeout" not in data
+    assert data.get("client_side_timeout") is True
 
 
 def test_litellm_timeout_header_keeps_its_attempt_timeout_beside_the_sdk_deadline() -> None:
-    data = _backend_data_for_headers({"x-litellm-timeout": "5", "x-stainless-read-timeout": "600.0"})
+    data: Final = _backend_data_for_headers({"x-litellm-timeout": "5", "x-stainless-read-timeout": "600.0"})
     assert data.get("timeout") == 5.0
     assert data.get("request_deadline") == 600.0
 
