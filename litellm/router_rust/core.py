@@ -5264,7 +5264,7 @@ class _Driver:
             return
         current: Final = call.kwargs.get("timeout")
         if current is None or (isinstance(current, (int, float)) and current > left):
-            call.kwargs["timeout"] = max(left, 0.0)
+            call.kwargs["timeout"] = max(left, 0.0)  # rebind-ok: the attempt's kwargs dict, read by the host call
 
     async def _within_budget(self, pending: Awaitable[object]) -> object:
         """A stream's first chunk, cut off when the caller's budget runs out: the failure is the
