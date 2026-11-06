@@ -246,13 +246,10 @@ def _overloaded_reply(_: Request) -> Reply:
     )
 
 
-@pytest.mark.parametrize("timeout_header", ["x-litellm-timeout", "x-stainless-timeout", "x-stainless-read-timeout"])
-def test_request_timeout_header_bounds_retries_and_their_retry_after_sleeps(
-    gateway: Gateway, timeout_header: str
-) -> None:
+def test_request_timeout_header_bounds_retries_and_their_retry_after_sleeps(gateway: Gateway) -> None:
     with gateway.scenario() as scenario, wire_server(_overloaded_reply) as wire:
         model: Final = scenario.model(api_base=wire.url + "/v1", num_retries=3)
-        response: Final = timed(lambda: _chat(gateway, {"model": model}, headers={timeout_header: "1"}))
+        response: Final = timed(lambda: _chat(gateway, {"model": model}, headers={"x-litellm-timeout": "1"}))
         assert response.value.status_code == 408, response.value.text
         assert_cut_short(response.seconds, injected_delay=RETRY_AFTER_SECONDS)
         assert posted_targets(wire) == ("/v1/chat/completions",)

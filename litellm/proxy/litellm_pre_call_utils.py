@@ -1638,7 +1638,7 @@ def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
 
 class LiteLLMProxyRequestSetup:
     @staticmethod
-    def _get_timeout_from_request(headers: Mapping[str, str]) -> float | None:
+    def _get_timeout_from_request(headers: dict) -> float | None:
         """
         Workaround for client request from Vercel's AI SDK.
 
@@ -1663,19 +1663,7 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
-    def _get_request_deadline_from_request(headers: Mapping[str, str]) -> float | None:
-        """The OpenAI SDKs send their client timeout on every request (Node as ``x-stainless-timeout``,
-        Python as ``x-stainless-read-timeout``). It bounds the whole routed request, retries and
-        fallbacks included, but never lengthens a configured per-attempt timeout."""
-        deadline_header: Final = headers.get("x-stainless-timeout", headers.get("x-stainless-read-timeout"))
-        try:
-            seconds: Final = float(deadline_header) if deadline_header is not None else None
-        except ValueError:
-            return None
-        return seconds if seconds is not None and seconds > 0 else None
-
-    @staticmethod
-    def _get_stream_timeout_from_request(headers: Mapping[str, str]) -> float | None:
+    def _get_stream_timeout_from_request(headers: dict) -> float | None:
         """
         Get the `stream_timeout` from the request headers.
         """
@@ -1698,7 +1686,7 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
-    def _get_num_retries_from_request(headers: Mapping[str, str]) -> int | None:
+    def _get_num_retries_from_request(headers: dict) -> int | None:
         """
         Workaround for client request from Vercel's AI SDK.
         """
@@ -1883,7 +1871,7 @@ class LiteLLMProxyRequestSetup:
     @staticmethod
     def add_litellm_data_for_backend_llm_call(
         *,
-        headers: dict[str, str],
+        headers: dict,
         request_data: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         general_settings: Mapping[str, object] | None = None,
@@ -1911,10 +1899,6 @@ class LiteLLMProxyRequestSetup:
         if header_stream_timeout is not None:
             data["stream_timeout"] = header_stream_timeout
 
-        header_deadline: Final = LiteLLMProxyRequestSetup._get_request_deadline_from_request(headers)
-        if header_deadline is not None:
-            data["request_deadline"] = header_deadline
-
         # Router._get_timeout resolves the effective per-attempt timeout from any of
         # kwargs["timeout"], kwargs["request_timeout"], or kwargs["stream_timeout"], and a
         # caller can supply any of those via the request body as well as the headers above.
@@ -1925,7 +1909,6 @@ class LiteLLMProxyRequestSetup:
         if (
             header_timeout is not None
             or header_stream_timeout is not None
-            or header_deadline is not None
             or request_data.get("timeout") is not None
             or request_data.get("request_timeout") is not None
             or request_data.get("stream_timeout") is not None

@@ -5212,7 +5212,8 @@ class _Driver:
                 stream: Final = self._stream_attempt(step, call.kwargs, slot)
                 logs_failure = first_to_log  # rebind-ok: the stream's own failure logging, for its first chunk
                 reading_stream = stream  # rebind-ok: None until the attempt opens a stream
-                response: Final = await self._within_budget(open_attempt_stream(stream, answered))  # pyright: ignore[reportUnknownArgumentType]  # see above
+                first_chunk: Final = open_attempt_stream(stream, answered)  # pyright: ignore[reportUnknownArgumentType]  # see above
+                response: Final = await (self._within_budget(first_chunk) if call.kwargs.get("stream") else first_chunk)
                 logs_failure = False  # rebind-ok: see above
                 # `self.success_calls[model_name] += 1`, inside the try: a counter replaced with a
                 # plain dict fails the attempt.
@@ -5270,7 +5271,7 @@ class _Driver:
         """A stream's first chunk, cut off when the caller's budget runs out: the failure is the
         attempt's, logged, refunded and classified like any other."""
         left: Final = self._budget_left()
-        if left is None:
+        if left is None or left <= 0:
             return await pending
         try:
             return await asyncio.wait_for(pending, left)

@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
+import openai
 import pytest
 from fakeredis import FakeRedis, FakeServer
 from fakeredis.aioredis import FakeRedis as FakeAsyncRedis
@@ -1502,17 +1504,25 @@ class TestRouterIOTokenIntegration:
         assert await _io_counters_since(router, first_minute) == (0, 0)
 
     @pytest.mark.asyncio
-    async def test_a_caller_deadline_cutting_off_an_attempt_refunds_its_io_reservation(self):
+    async def test_a_retry_the_caller_s_timeout_refuses_refunds_its_io_reservation(self):
         router: Final = _router_with_io_limits()
         first_minute: Final = _current_minute()
+        overloaded: Final = openai.InternalServerError(
+            message="scripted 503",
+            response=httpx.Response(
+                status_code=503,
+                headers={"retry-after": "30"},
+                request=httpx.Request("POST", "https://example.invalid/v1"),
+            ),
+            body=None,
+        )
 
         with pytest.raises(litellm.Timeout):
             await router.acompletion(
                 model="limited",
                 messages=[{"role": "user", "content": "hello there"}],
                 max_tokens=100,
-                mock_response="hi",
-                mock_delay=30,
+                mock_response=overloaded,
                 timeout=0.2,
             )
 

@@ -3044,33 +3044,6 @@ def test_add_litellm_data_for_backend_llm_call_merges_keepalive_seconds_header()
     assert result.get("keepalive_seconds") == 20.0
 
 
-def _backend_data_for_headers(headers: dict[str, str]) -> dict[str, object]:
-    return dict(
-        LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
-            headers=headers, request_data={}, user_api_key_dict=UserAPIKeyAuth(api_key="sk-test")
-        )
-    )
-
-
-@pytest.mark.parametrize("header", ["x-stainless-timeout", "x-stainless-read-timeout"])
-def test_openai_sdk_timeout_header_becomes_a_request_deadline_not_an_attempt_timeout(header: str) -> None:
-    data: Final = _backend_data_for_headers({header: "90"})
-    assert data.get("request_deadline") == 90.0
-    assert "timeout" not in data
-    assert data.get("client_side_timeout") is True
-
-
-def test_litellm_timeout_header_keeps_its_attempt_timeout_beside_the_sdk_deadline() -> None:
-    data: Final = _backend_data_for_headers({"x-litellm-timeout": "5", "x-stainless-read-timeout": "600.0"})
-    assert data.get("timeout") == 5.0
-    assert data.get("request_deadline") == 600.0
-
-
-@pytest.mark.parametrize("value", ["not-a-number", "0", "-3"])
-def test_unusable_openai_sdk_timeout_header_is_ignored(value: str) -> None:
-    assert "request_deadline" not in _backend_data_for_headers({"x-stainless-read-timeout": value})
-
-
 def test_add_user_api_key_auth_to_request_metadata():
     """
     Test that add_user_api_key_auth_to_request_metadata properly adds user API key authentication data to request metadata

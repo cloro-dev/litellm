@@ -671,7 +671,7 @@ def _retrying_router(timeout: float | None = None) -> Router:
     )
 
 
-@pytest.mark.parametrize("timeout_field", ["timeout", "request_timeout", "request_deadline"])
+@pytest.mark.parametrize("timeout_field", ["timeout", "request_timeout"])
 @pytest.mark.asyncio
 async def test_caller_timeout_cuts_off_the_retry_after_sleep(timeout_field: str) -> None:
     router: Final = _retrying_router()
