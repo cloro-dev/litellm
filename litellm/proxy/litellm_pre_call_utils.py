@@ -1638,7 +1638,7 @@ def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
 
 class LiteLLMProxyRequestSetup:
     @staticmethod
-    def _get_timeout_from_request(headers: dict) -> float | None:
+    def _get_timeout_from_request(headers: Mapping[str, str]) -> float | None:
         """
         Workaround for client request from Vercel's AI SDK.
 
@@ -1663,7 +1663,7 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
-    def _get_request_deadline_from_request(headers: dict) -> float | None:
+    def _get_request_deadline_from_request(headers: Mapping[str, str]) -> float | None:
         """The OpenAI SDKs send their client timeout on every request (Node as ``x-stainless-timeout``,
         Python as ``x-stainless-read-timeout``). It bounds the whole routed request, retries and
         fallbacks included, but never lengthens a configured per-attempt timeout."""
@@ -1675,7 +1675,7 @@ class LiteLLMProxyRequestSetup:
         return seconds if seconds is not None and seconds > 0 else None
 
     @staticmethod
-    def _get_stream_timeout_from_request(headers: dict) -> float | None:
+    def _get_stream_timeout_from_request(headers: Mapping[str, str]) -> float | None:
         """
         Get the `stream_timeout` from the request headers.
         """
@@ -1698,7 +1698,7 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
-    def _get_num_retries_from_request(headers: dict) -> int | None:
+    def _get_num_retries_from_request(headers: Mapping[str, str]) -> int | None:
         """
         Workaround for client request from Vercel's AI SDK.
         """
@@ -1883,7 +1883,7 @@ class LiteLLMProxyRequestSetup:
     @staticmethod
     def add_litellm_data_for_backend_llm_call(
         *,
-        headers: dict,
+        headers: dict[str, str],
         request_data: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         general_settings: Mapping[str, object] | None = None,

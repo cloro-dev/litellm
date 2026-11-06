@@ -3044,7 +3044,7 @@ def test_add_litellm_data_for_backend_llm_call_merges_keepalive_seconds_header()
     assert result.get("keepalive_seconds") == 20.0
 
 
-def _backend_data_for_headers(headers: dict[str, str]) -> dict:
+def _backend_data_for_headers(headers: dict[str, str]) -> dict[str, object]:
     return dict(
         LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
             headers=headers, request_data={}, user_api_key_dict=UserAPIKeyAuth(api_key="sk-test")

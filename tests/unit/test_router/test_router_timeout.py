@@ -661,11 +661,13 @@ def _service_unavailable(retry_after: str) -> openai.InternalServerError:
     return openai.InternalServerError(message="scripted 503", response=response, body=None)
 
 
-def _retrying_router(**router_settings: object) -> Router:
+def _retrying_router(timeout: float | None = None) -> Router:
     return Router(
-        model_list=[{"model_name": "flaky-503", "litellm_params": {"model": "openai/flaky-503", "api_key": "test-key"}}],
+        model_list=[
+            {"model_name": "flaky-503", "litellm_params": {"model": "openai/flaky-503", "api_key": "test-key"}}
+        ],
         num_retries=1,
-        **router_settings,
+        timeout=timeout,
     )
 
 
